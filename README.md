@@ -6,16 +6,18 @@ A self-contained Redis instance, run via Docker Compose, reachable from local Py
 
 - [What is Redis?](#what-is-redis)
 - [Project Structure](#project-structure)
+- [Choosing a Setup: Plain Redis vs Redis Stack](#choosing-a-setup-plain-redis-vs-redis-stack)
 - [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
 - [Verifying Redis is Running](#verifying-redis-is-running)
 - [Connecting from Python](#connecting-from-python)
-- [docker-compose.yml Explained](#docker-composeyml-explained)
+- [Docker Compose Files Explained](#docker-compose-files-explained)
 - [Redis Data Types](#redis-data-types)
 - [Persistence: RDB vs AOF](#persistence-rdb-vs-aof)
 - [Key Expiration (TTL)](#key-expiration-ttl)
 - [Pub/Sub](#pubsub)
 - [Transactions](#transactions)
+- [Redis Stack Extras: RedisInsight & Modules](#redis-stack-extras-redisinsight--modules)
 - [Redis CLI Cheat Sheet](#redis-cli-cheat-sheet)
 - [Replication, Sentinel & Cluster (Beyond This Setup)](#replication-sentinel--cluster-beyond-this-setup)
 - [Security Notes](#security-notes)
@@ -47,15 +49,32 @@ Key properties:
 ## Project Structure
 
 ```
-.redis-tutorial/
-├── myvenv/               # Python virtual environment (not committed)
-├── src/                  # Scripts used to revise Redis concepts
-├── test/                 # Testing scripts (e.g. test_connection.py — verifies Redis connectivity)
+redis-tutorial/
+├── myvenv/                     # Python virtual environment (not committed)
+├── src/                        # Scripts used to revise Redis concepts
+├── test/                       # Testing scripts (e.g. test_connection.py — verifies Redis connectivity)
 ├── .gitignore
-├── docker-compose.yaml   # Defines and configures the Redis container
-├── README.md             # This file
-└── requirements.txt      # Python dependencies (e.g. redis)
+├── docker-compose.yaml         # Plain Redis container
+├── docker-compose-stack.yaml   # Redis Stack container (modules + RedisInsight)
+├── README.md                   # This file
+└── requirements.txt            # Python dependencies (e.g. redis)
 ```
+
+---
+
+## Choosing a Setup: Plain Redis vs Redis Stack
+
+This repo ships **two** Compose files — pick whichever fits what you're doing right now:
+
+| | `docker-compose.yaml` | `docker-compose-stack.yaml` |
+|---|---|---|
+| Image | `redis:7-alpine` | `redis/redis-stack:latest` |
+| Core Redis commands (strings, lists, sets, etc.) | Yes | Yes |
+| Bloom filters, JSON, TimeSeries, full-text/vector search | No | Yes |
+| RedisInsight (browser-based GUI) | No | Yes — `http://localhost:8001` |
+| Good for | Plain caching / core data-structure practice | Working with modules (e.g. Bloom filters) or browsing data visually |
+
+**Only run one at a time.** Both map Redis to host port `6379`, so starting the second one while the first is still up will fail with `port is already allocated`. Run `docker compose down` (or, for the stack file, `docker compose -f docker-compose-stack.yaml down`) before switching.
 
 ---
 
@@ -101,6 +120,17 @@ python3 --version
    docker compose logs -f redis
    ```
 
+### Using Redis Stack Instead
+
+The commands above default to `docker-compose.yaml` (Compose picks it up automatically since that's its default filename). To use Redis Stack instead, add `-f docker-compose-stack.yaml` to any command:
+
+```bash
+docker compose -f docker-compose-stack.yaml up -d
+docker compose -f docker-compose-stack.yaml ps
+docker compose -f docker-compose-stack.yaml logs -f redis-stack
+docker compose -f docker-compose-stack.yaml down
+```
+
 ---
 
 ## Verifying Redis is Running
@@ -116,6 +146,8 @@ The `STATUS` column should show `healthy` once the container's internal `redis-c
 docker exec -it redis redis-cli ping
 ```
 Expected output: `PONG`
+
+*(Running Redis Stack instead? Its container is named `redis-stack`: `docker exec -it redis-stack redis-cli ping`.)*
 
 **Option C — via the included Python script (see below).**
 
@@ -146,7 +178,9 @@ It connects to `localhost:6379` (because `docker-compose.yml` maps the container
 
 ---
 
-## docker-compose.yml Explained
+## Docker Compose Files Explained
+
+### `docker-compose.yaml` (plain Redis)
 
 ```yaml
 services:
@@ -178,6 +212,38 @@ volumes:
 | `command` | Overrides the container's default startup command — here, to turn on AOF persistence. |
 | `volumes` | Mounts a named volume at `/data`, the directory Redis uses for RDB/AOF files, so data outlives the container. |
 | `healthcheck` | Lets Docker (and `docker compose ps`) report whether Redis is actually accepting commands, not just "started." |
+
+### `docker-compose-stack.yaml` (Redis Stack)
+
+```yaml
+services:
+  redis-stack:
+    image: redis/redis-stack:latest   # Redis + Bloom/JSON/TimeSeries/Search modules + RedisInsight
+    container_name: redis-stack
+    restart: unless-stopped
+    ports:
+      - "6379:6379"    # Redis server
+      - "8001:8001"    # RedisInsight (browser GUI) — http://localhost:8001
+    environment:
+      - REDIS_ARGS=--appendonly yes   # Enable AOF persistence, same as the plain setup
+    volumes:
+      - redis_stack_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis_stack_data:
+```
+
+| Field | What it does |
+|---|---|
+| `image` | `redis/redis-stack` bundles core Redis with extra modules and RedisInsight, all in one image. |
+| `ports` (`8001`) | Exposes RedisInsight's web UI on your host, separate from the Redis protocol port. |
+| `environment: REDIS_ARGS` | Redis Stack's way of passing flags to the underlying `redis-server` process — the equivalent of `command:` in the plain setup. |
+| `volumes` | Its own named volume (`redis_stack_data`), kept separate from the plain setup's `redis_data`, so the two never share or overwrite each other's data. |
 
 ---
 
@@ -276,6 +342,41 @@ Note: unlike SQL transactions, Redis doesn't roll back on a command failing mid-
 
 ---
 
+## Redis Stack Extras: RedisInsight & Modules
+
+Only relevant if you're running `docker-compose-stack.yaml`. Plain Redis (`docker-compose.yaml`) doesn't include any of this.
+
+### RedisInsight (GUI)
+
+Open `http://localhost:8001` in a browser. You can browse keys, run commands, and inspect data structures — including Bloom filters — visually, without touching the CLI.
+
+### Bloom Filters
+
+A **Bloom filter** is a probabilistic structure for fast, memory-cheap "have I seen this before?" checks. It can produce false positives (says "maybe seen" when it wasn't) but never false negatives (if it says "definitely not seen," that's certain).
+
+```bash
+docker exec -it redis-stack redis-cli
+BF.ADD myfilter "item1"            # Add an item
+BF.EXISTS myfilter "item1"         # -> 1 (probably present)
+BF.EXISTS myfilter "item2"         # -> 0 (definitely absent)
+BF.MADD myfilter "item2" "item3"   # Add multiple items at once
+```
+
+Good for things like "has this user already claimed this coupon?" or "have we crawled this URL before?" at scale, without storing every single item in a Set.
+
+### Other Modules Available
+
+| Module | Command prefix | Use case |
+|---|---|---|
+| RedisJSON | `JSON.*` | Store and query JSON documents directly in Redis |
+| RediSearch | `FT.*` | Full-text search, and vector similarity search |
+| RedisTimeSeries | `TS.*` | Time-stamped data (metrics, sensor readings) with built-in downsampling |
+| Probabilistic types | `BF.*`, `CF.*`, `CMS.*`, `TOPK.*` | Bloom filters, Cuckoo filters, Count-Min Sketch, Top-K |
+
+These commands only work against `docker-compose-stack.yaml` — running them against the plain `redis:7-alpine` container returns an `unknown command` error.
+
+---
+
 ## Redis CLI Cheat Sheet
 
 ```bash
@@ -326,11 +427,12 @@ Since Redis 8.0 (2025), Redis ships under a **tri-license model** — you can us
 
 | Problem | Likely cause / fix |
 |---|---|
-| `port is already allocated` | Something else on your machine is using port 6379. Either stop it, or change the host side of the mapping, e.g. `"6380:6379"`, and connect on 6380 instead. |
+| `port is already allocated` | Either something else on your machine is using port 6379, or you have both `docker-compose.yaml` and `docker-compose-stack.yaml` running at once (they both use 6379 — see [Choosing a Setup](#choosing-a-setup-plain-redis-vs-redis-stack)). Stop one, or change the host side of a mapping, e.g. `"6380:6379"`. |
 | `Connection refused` from Python | Redis isn't running yet, or you're using the wrong host (`redis` vs `localhost` — see [Connecting from Python](#connecting-from-python)). Run `docker compose ps` to check status. |
 | Data disappeared after `docker compose down` | You likely ran `docker compose down -v`, which also removes the named volume. Use `docker compose down` (without `-v`) to keep data. |
-| `docker compose ps` shows `unhealthy` | Check logs with `docker compose logs redis` — often a config/startup error. |
+| `docker compose ps` shows `unhealthy` | Check logs with `docker compose logs redis` (or `docker compose -f docker-compose-stack.yaml logs redis-stack`) — often a config/startup error. |
 | `ModuleNotFoundError: No module named 'redis'` | Run `pip install redis` in the Python environment you're using to run the script. |
+| `ERR unknown command 'BF.ADD'` (or `JSON.*`, `FT.*`, `TS.*`) | You're connected to the plain Redis container, not Redis Stack. These module commands only work against `docker-compose-stack.yaml`. |
 
 ---
 
@@ -340,3 +442,5 @@ Since Redis 8.0 (2025), Redis ships under a **tri-license model** — you can us
 - [Redis Commands Reference](https://redis.io/commands/)
 - [redis-py (Python client) Documentation](https://redis-py.readthedocs.io/)
 - [Redis University (free courses)](https://university.redis.com/)
+- [RedisInsight Documentation](https://redis.io/insight/)
+- [Probabilistic Data Types (Bloom, Cuckoo, Count-Min Sketch, Top-K)](https://redis.io/docs/latest/develop/data-types/probabilistic/)
