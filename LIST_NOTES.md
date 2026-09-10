@@ -7,15 +7,15 @@ Notes from exploring the `List` data type, plus everything else worth knowing th
 ## What I Know
 
 - Redis lists are linked lists of string values. They are frequently used to:
-    - Implement stacks and queues.
-    - Build queue management for background worker systems.
-- `LPUSH` returns the size of the list after adding the new element (so does `RPUSH`).
-- The max length of a Redis list is (2^32) - 1 elements.
-- Redis list's time complexity is similar to List DS — cheap at the ends (push/pop), expensive in the middle (random access, insert, search).
+  - Implement stacks and queues.
+  - Build queue management for background worker systems.
+- `LPUSH` (and `RPUSH`) return the size of the list *after* adding the new element.
+- The max length of a Redis list is `(2^32) - 1` elements.
+- Redis list's time complexity is similar to a linked-list data structure — cheap at the ends (`LPUSH`/`RPUSH`/`LPOP`/`RPOP` are O(1)), more expensive the deeper you index into the middle (`LINDEX`, `LINSERT`, `LREM` are O(N)).
 
 ---
 
-## Python Walkthrough — Stack & Queue Using Lists
+## Python Client — Stack vs Queue
 
 ```python
 import redis
@@ -80,140 +80,200 @@ if __name__ == "__main__":
     print(resp)
 ```
 
-**Why this works — the core trick with lists is which end you push/pop from:**
+**Why this works, even though `add_to_stack` and `add_to_queue` are identical:**
 
-- **Stack (LIFO)**: `add_to_stack` pushes with `LPUSH` (head), `remove_from_stack` pops with `LPOP` (also head). Whatever went in last comes out first — classic stack behavior.
-- **Queue (FIFO)**: `add_to_queue` also pushes with `LPUSH` (head), but `remove_from_queue` pops with `RPOP` (tail — the opposite end). Since new items always enter at the head and leave from the tail, the *oldest* item leaves first — classic FIFO queue. (You'd get the same FIFO result the other way round too: `RPUSH` + `LPOP`. What matters is that push and pop happen on *opposite* ends.)
-- `LRANGE key 0 -1` at the end reads the whole list, head to tail — `0` is the first index, `-1` means "the last element," so `0 -1` = everything.
+The push side doesn't need to differ — what makes something a stack vs a queue is *which end you pop from, relative to the end you pushed to*:
+
+- **Stack (LIFO)** = push and pop from the **same** end → `LPUSH` + `LPOP`. The last thing in is the first thing out.
+- **Queue (FIFO)** = push and pop from **opposite** ends → `LPUSH` + `RPOP` (or `RPUSH` + `LPOP`). The first thing in is the first thing out.
 
 ---
 
-## Filling the Gaps — What Wasn't Covered Yet
+## CLI Session — What I Tried
 
-### 1. Adding elements
-
-```bash
-LPUSH key v1 v2 v3     # Push one or more values onto the head (left)
-RPUSH key v1 v2 v3     # Push one or more values onto the tail (right)
-LPUSHX key value       # Push onto the head, but ONLY if the key already exists
-RPUSHX key value       # Push onto the tail, but ONLY if the key already exists
+```
+127.0.0.1:6379> lpush messages hello
+(integer) 1
+127.0.0.1:6379> lpush messages world
+(integer) 2
+127.0.0.1:6379> rpush messages bye!
+(integer) 3
+127.0.0.1:6379> lpop messages
+"world"
+127.0.0.1:6379> rpop messages
+"bye!"
+127.0.0.1:6379> rpop messages
+"hello"
+127.0.0.1:6379> rpop messages
+(nil)
+127.0.0.1:6379> llen messages
+(integer) 0
+127.0.0.1:6379> lpush indices 1
+(integer) 1
+127.0.0.1:6379> lpush indices 2
+(integer) 2
+127.0.0.1:6379> lpush indices 3
+(integer) 3
+127.0.0.1:6379> lpush indices 4
+(integer) 4
+127.0.0.1:6379> lpush indices 5
+(integer) 5
+127.0.0.1:6379> bllpop indices 10
+(error) ERR unknown command 'bllpop', with args beginning with: 'indices' '10'
+127.0.0.1:6379> blpop indices 10
+1) "indices"
+2) "5"
+127.0.0.1:6379> blpop indices 10
+1) "indices"
+2) "4"
+127.0.0.1:6379> blpop indices 10
+1) "indices"
+2) "3"
+127.0.0.1:6379> blpop indices 10
+1) "indices"
+2) "2"
+127.0.0.1:6379> blpop indices 10
+1) "indices"
+2) "1"
+127.0.0.1:6379> blpop indices 10
+(nil)
+(10.05s)
+127.0.0.1:6379> blpop indices 20
+1) "indices"
+2) "3"
+(6.98s)
+127.0.0.1:6379> lrange index 0 -1'
+Invalid argument(s)
+127.0.0.1:6379> lrange index 0 -1
+(empty array)
+127.0.0.1:6379> lrange counter:index 0 -1
+1) "2"
+2) "1"
+127.0.0.1:6379> lrange counter:index -1 0
+(empty array)
+127.0.0.1:6379> del counter:index
+(integer) 1
 ```
 
-### 2. Removing elements
+**What actually happened here, worth remembering:**
+
+- After `lpush messages hello` then `lpush messages world`, the list (left → right) is `[world, hello]`. `rpush messages bye!` appends at the tail: `[world, hello, bye!]`. `lpop` took `world` (leftmost); the two `rpop`s then took `bye!` then `hello` (rightmost each time) — draining the list from both ends until it's empty, hence `LLEN` → `0`.
+- `bllpop` isn't a real command — it's a typo of `BLPOP` — hence `unknown command`.
+- `BLPOP` (**b**locking **l**eft **pop**) pops from the head, same as `LPOP`, but if the list is empty it **waits** up to `timeout` seconds for something to arrive instead of returning `(nil)` immediately. Each call here returned the current head of `indices` and removed it, until the list was empty.
+- The `blpop indices 10` that returned `(nil)` after `(10.05s)` means it waited out the *entire* 10-second timeout because `indices` was empty and nothing arrived — that's expected blocking behavior, not an error.
+- The next call, `blpop indices 20`, unblocked after only `6.98s` and returned `"3"` — meaning some *other* client pushed `3` onto `indices` while this one was waiting. That's the actual point of `BLPOP`: multiple workers can block on the same list and whichever is waiting picks up the next item the instant it's pushed, instead of polling.
+- `lrange index 0 -1'` — that trailing stray `'` is an unbalanced quote, so `redis-cli` couldn't parse the line at all → `Invalid argument(s)`. That's a client-side parsing error, not a Redis server error.
+- `lrange index 0 -1` (now valid) returned `(empty array)` because `index` (singular) was never actually created — the real key from the Python script was `counter:index`.
+- `lrange counter:index 0 -1` → `["2", "1"]`. Order matters: `LRANGE` always returns elements left-to-right regardless of which indices you pass.
+- `lrange counter:index -1 0` → `(empty array)`. This is a common gotcha: `LRANGE` does **not** auto-reverse. If the *start* index resolves to a position after the *stop* index, you get nothing back — you can't pass `-1 0` expecting "last to first."
+
+---
+
+## Filling the Gaps — Every Other List Operation
+
+### 1. Pushing — the variants you haven't used yet
 
 ```bash
-LPOP key           # Remove and return the head element
-RPOP key           # Remove and return the tail element
-LPOP key 3         # Remove and return the first 3 elements from the head
-RPOP key 3         # Remove and return the last 3 elements from the tail
-LREM key 2 "hey"    # Remove up to 2 occurrences of "hey", searching from the head
-LREM key -2 "hey"   # Same, but searching from the tail (negative count)
-LREM key 0 "hey"    # Remove ALL occurrences of "hey"
+LPUSH mylist a b c        # Push multiple elements at once (pushed one-by-one, so final order is c,b,a at the head)
+RPUSH mylist x y z        # Same idea, at the tail
+LPUSHX mylist "only-if-exists"   # Push to head, but ONLY if the key already exists — no-op (returns 0) otherwise
+RPUSHX mylist "only-if-exists"   # Same, at the tail
 ```
 
-### 3. Reading elements (without removing them)
+### 2. Popping — with a count
 
 ```bash
-LRANGE key 0 -1     # Read the entire list, head to tail
-LRANGE key 0 2       # Read the first 3 elements (indexes 0, 1, 2)
-LINDEX key 0        # Read a single element at a given index (0 = head, -1 = tail)
-LLEN key            # How many elements are in the list
+LPOP mylist 3     # Pop up to 3 elements from the head at once (returns an array), instead of one at a time
+RPOP mylist 3     # Same, from the tail
 ```
 
-### 4. Modifying elements in place
+### 3. Reading without removing
 
 ```bash
-LSET key 0 "newvalue"                  # Overwrite the element at a given index
-LINSERT key BEFORE "pivot" "newval"    # Insert newval right before the first occurrence of "pivot"
-LINSERT key AFTER "pivot" "newval"     # Insert newval right after the first occurrence of "pivot"
-LTRIM key 0 4                          # Keep only indexes 0-4, discard everything else
+LINDEX mylist 0     # Get the element at a specific index (0 = head, -1 = tail)
+LLEN mylist         # Length of the list
+LPOS mylist "c"     # Find the index of the first occurrence of a value (added in Redis 6.2)
+LPOS mylist "c" COUNT 0   # Find the index of EVERY occurrence
 ```
 
-`LTRIM` is what you'd use to cap a list at, say, the last 100 log lines — push new entries, then `LTRIM key 0 99` after every push to keep it bounded.
-
-### 5. Moving elements between two lists, atomically
+### 4. Modifying in place
 
 ```bash
-LMOVE source destination LEFT RIGHT    # Pop from source's head, push onto destination's tail — atomic
-RPOPLPUSH source destination           # Older, single-purpose command — same as LMOVE source destination RIGHT LEFT (deprecated in favor of LMOVE)
+LSET mylist 0 "new-value"           # Overwrite the element at a given index
+LINSERT mylist BEFORE "c" "b.5"     # Insert a new element right before (or AFTER) a pivot value
+LREM mylist 1 "b"                   # Remove up to 1 occurrence of "b", searching head-to-tail
+LREM mylist -1 "b"                  # Negative count searches tail-to-head instead
+LREM mylist 0 "b"                   # Count of 0 removes ALL occurrences
+LTRIM mylist 0 2                    # Keep only elements 0 through 2, discard everything else — shrinks the list in place
 ```
 
-This is the building block for a **reliable queue**: pop a job from `queue:pending` and push it onto `queue:processing` in one atomic step, so a job is never silently lost between the two operations.
-
-### 6. Blocking pop — wait for something to arrive
+### 5. Moving elements between lists (atomically)
 
 ```bash
-BLPOP key1 key2 5    # Block for up to 5 seconds waiting for ANY element to appear on key1 or key2, then pop it
-BRPOP key1 key2 0    # Same, but from the tail; timeout 0 = block forever
-BLMOVE source destination LEFT RIGHT 5   # Blocking version of LMOVE
-BRPOPLPUSH source destination 5          # Older, single-purpose blocking move (deprecated in favor of BLMOVE)
+RPOPLPUSH source destination         # Pop from the tail of `source`, push to the head of `destination`, in one atomic step
+LMOVE source destination LEFT RIGHT  # The general-purpose version (Redis 6.2+) — choose which end of each list to use
 ```
 
-This is exactly how a **background worker** waits on a job queue instead of polling in a loop: `BLPOP jobs:queue 0` sleeps until a job shows up, then wakes up and processes it immediately.
+`RPOPLPUSH` with the same key for source and destination rotates a list — handy for round-robin processing. `LMOVE` does the same job but lets you pick `LEFT`/`RIGHT` on both ends instead of being locked to "tail → head."
 
-### 7. Popping from whichever of several lists has something (Redis 7.0+)
+### 6. Blocking variants — beyond the `BLPOP` you already tried
 
 ```bash
-LMPOP 2 queue:a queue:b LEFT COUNT 2     # Pop up to 2 elements from the first of queue:a/queue:b that isn't empty
-BLMPOP 5 2 queue:a queue:b LEFT COUNT 2  # Same, but blocks up to 5 seconds if both are empty
+BRPOP key1 key2 timeout           # Same as BLPOP, but pops from the tail; can watch multiple keys, returns from whichever gets data first
+BRPOPLPUSH source destination timeout   # Blocking version of RPOPLPUSH
+BLMOVE source destination LEFT RIGHT timeout   # Blocking version of LMOVE (Redis 6.2+)
 ```
 
-Useful when a worker should drain whichever of several queues has work first, instead of checking each one manually.
-
-### 8. Finding an element's position (Redis 6.2+)
+### 7. Popping across multiple lists at once (Redis 7.0+)
 
 ```bash
-LPOS key "value"                 # Index of the first matching element (or nil if not found)
-LPOS key "value" RANK -1         # Search from the tail instead of the head
-LPOS key "value" COUNT 0         # Return the indexes of ALL matches
+LMPOP 2 list1 list2 LEFT COUNT 5    # Pop up to 5 elements from the FIRST non-empty list among list1/list2
+BLMPOP 10 2 list1 list2 LEFT COUNT 5   # Same, but blocks up to 10s if both lists are currently empty
 ```
 
-### 9. Generic key commands you'll use alongside lists
+Useful when a worker watches several queues and just wants "give me work from whichever queue has something," without checking each one manually.
+
+### 8. Internal storage (good to know, not something you'll call directly)
 
 ```bash
-EXISTS key      # 1 if the key exists, 0 if not
-TYPE key        # -> list
-DEL key         # Delete the whole list
-EXPIRE key 60   # TTL applies to the whole list, not individual elements
+OBJECT ENCODING mylist   # -> "listpack" for small lists, "quicklist" once it grows past Redis's size/length thresholds
 ```
 
-### 10. Bonus: multi-element move (Redis 8.10+, very new)
-
-```bash
-LMOVEM source destination LEFT LEFT COUNT 2 BULK   # Move up to 2 elements at once, atomically
-```
-
-`LMOVEM` extends `LMOVE` to move several elements in a single atomic step instead of one at a time. This landed in Redis 8.10 (mid-2026) — recent enough that it's worth knowing exists, but not something you'll see in most tutorials yet.
+Small lists are stored as a compact `listpack` (cheap on memory); Redis automatically switches to a `quicklist` (a linked list of listpacks) as the list grows. This is transparent — your commands behave identically either way.
 
 ---
 
 ## Complete List Command Cheat Sheet
 
-| Command | What it does | redis-py method |
+| Command | What it does |
+|---|---|
+| `LPUSH key val [val ...]` | Push one or more elements to the head; returns new length |
+| `RPUSH key val [val ...]` | Push one or more elements to the tail; returns new length |
+| `LPUSHX key val` | Push to head, only if the key already exists |
+| `RPUSHX key val` | Push to tail, only if the key already exists |
+| `LPOP key [count]` | Remove and return element(s) from the head |
+| `RPOP key [count]` | Remove and return element(s) from the tail |
+| `LLEN key` | Number of elements in the list |
+| `LRANGE key start stop` | Get a range of elements (left → right, inclusive) |
+| `LINDEX key index` | Get the element at a specific index |
+| `LSET key index val` | Overwrite the element at a specific index |
+| `LINSERT key BEFORE\|AFTER pivot val` | Insert a new element next to an existing value |
+| `LREM key count val` | Remove occurrences of a value (`count` > 0 = head→tail, < 0 = tail→head, 0 = all) |
+| `LTRIM key start stop` | Shrink the list to only the given range |
+| `LPOS key val [COUNT n]` | Find the index (or indices) of a value |
+| `RPOPLPUSH source dest` | Atomically move the tail of one list to the head of another |
+| `LMOVE source dest LEFT\|RIGHT LEFT\|RIGHT` | Generalized atomic move between two lists (Redis 6.2+) |
+| `BLPOP key [key ...] timeout` | Blocking `LPOP` across one or more keys |
+| `BRPOP key [key ...] timeout` | Blocking `RPOP` across one or more keys |
+| `BRPOPLPUSH source dest timeout` | Blocking `RPOPLPUSH` |
+| `BLMOVE source dest LEFT\|RIGHT LEFT\|RIGHT timeout` | Blocking `LMOVE` (Redis 6.2+) |
+| `LMPOP numkeys key [key ...] LEFT\|RIGHT [COUNT n]` | Pop from the first non-empty list among several (Redis 7.0+) |
+| `BLMPOP timeout numkeys key [key ...] LEFT\|RIGHT [COUNT n]` | Blocking `LMPOP` (Redis 7.0+) |
+| `OBJECT ENCODING key` | Internal storage format (`listpack` / `quicklist`) |
+
+**Quick reference — stack vs queue with lists:**
+
+| Pattern | Push with | Pop with |
 |---|---|---|
-| `LPUSH key v1 v2 ...` | Push one or more values onto the head | `lpush(key, *values)` |
-| `RPUSH key v1 v2 ...` | Push one or more values onto the tail | `rpush(key, *values)` |
-| `LPUSHX key value` | Push onto the head, only if the key exists | `lpushx(key, value)` |
-| `RPUSHX key value` | Push onto the tail, only if the key exists | `rpushx(key, value)` |
-| `LPOP key [count]` | Remove & return from the head | `lpop(key, count=None)` |
-| `RPOP key [count]` | Remove & return from the tail | `rpop(key, count=None)` |
-| `LLEN key` | Number of elements in the list | `llen(key)` |
-| `LRANGE key start stop` | Read a range of elements | `lrange(key, start, stop)` |
-| `LINDEX key index` | Read a single element by index | `lindex(key, index)` |
-| `LSET key index value` | Overwrite the element at an index | `lset(key, index, value)` |
-| `LINSERT key BEFORE\|AFTER pivot value` | Insert relative to an existing element | `linsert(key, where, refvalue, value)` |
-| `LREM key count value` | Remove occurrences of a value | `lrem(key, count, value)` |
-| `LTRIM key start stop` | Shrink the list down to a range | `ltrim(key, start, stop)` |
-| `LMOVE source destination LEFT\|RIGHT LEFT\|RIGHT` | Atomically move one element between lists | `lmove(src, dst, src_side, dst_side)` |
-| `RPOPLPUSH source destination` | (Deprecated) same as `LMOVE ... RIGHT LEFT` | `rpoplpush(src, dst)` |
-| `BLPOP key1 key2 ... timeout` | Blocking pop from the head of the first non-empty key | `blpop(keys, timeout)` |
-| `BRPOP key1 key2 ... timeout` | Blocking pop from the tail | `brpop(keys, timeout)` |
-| `BLMOVE source destination LEFT\|RIGHT LEFT\|RIGHT timeout` | Blocking version of `LMOVE` | `blmove(src, dst, timeout, src_side, dst_side)` |
-| `BRPOPLPUSH source destination timeout` | (Deprecated) blocking version of `RPOPLPUSH` | `brpoplpush(src, dst, timeout)` |
-| `LMPOP numkeys key1 key2 ... LEFT\|RIGHT [COUNT n]` | Pop from the first non-empty of several lists | `lmpop(keys, direction, count=None)` |
-| `BLMPOP timeout numkeys key1 key2 ... LEFT\|RIGHT [COUNT n]` | Blocking version of `LMPOP` | `blmpop(timeout, keys, direction, count=None)` |
-| `LPOS key value [RANK r] [COUNT c]` | Find the index/indexes of a value | `lpos(key, value, rank=None, count=None)` |
-| `LMOVEM source destination side side [COUNT\|EXACTLY n MODE]` | Atomically move several elements at once (Redis 8.10+) | Check your client version's support |
-| `EXISTS key` | 1 if the key exists, 0 if not | `exists(key)` |
-| `TYPE key` | What data type this key holds | `type(key)` |
-| `DEL key` | Delete the key entirely | `delete(key)` |
+| Stack (LIFO) | `LPUSH` | `LPOP` |
+| Queue (FIFO) | `LPUSH` | `RPOP` |
