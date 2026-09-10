@@ -13,6 +13,7 @@ A self-contained Redis instance, run via Docker Compose, reachable from local Py
 - [Connecting from Python](#connecting-from-python)
 - [Docker Compose Files Explained](#docker-compose-files-explained)
 - [Redis Data Types](#redis-data-types)
+- [Practice Scripts & Notes](#practice-scripts--notes)
 - [Persistence: RDB vs AOF](#persistence-rdb-vs-aof)
 - [Key Expiration (TTL)](#key-expiration-ttl)
 - [Pub/Sub](#pubsub)
@@ -50,15 +51,66 @@ Key properties:
 
 ```
 redis-tutorial/
-├── myvenv/                     # Python virtual environment (not committed)
-├── src/                        # Scripts used to revise Redis concepts
-├── test/                       # Testing scripts (e.g. test_connection.py — verifies Redis connectivity)
+├── docker-compose.yaml              # Plain Redis container (redis:7-alpine)
+├── docker-compose-stack.yaml.yaml   # Redis Stack container (modules + RedisInsight)
+├── requirements.txt                 # Python dependencies (redis)
+├── README.md                        # This file
 ├── .gitignore
-├── docker-compose.yaml         # Plain Redis container
-├── docker-compose-stack.yaml   # Redis Stack container (modules + RedisInsight)
-├── README.md                   # This file
-└── requirements.txt            # Python dependencies (e.g. redis)
+│
+├── src/                             # One runnable practice script per data type
+│   ├── string_redis.py
+│   ├── bitmap_redis.py
+│   ├── bitfield_redis.py
+│   ├── array_redis.py
+│   ├── geospatial_redis.py
+│   ├── hash_redis.py
+│   ├── json_redis.py
+│   ├── list_redis.py
+│   ├── set_redis.py
+│   ├── sorted_set_redis.py
+│   ├── stream_redis.py
+│   ├── timeseries_redis.py
+│   ├── vector_set_redis.py
+│   ├── bloom_filter_redis.py
+│   ├── count_min_sketch_redis.py
+│   ├── cuckoo_filter_redis.py
+│   ├── hyperloglog_redis.py
+│   ├── t_digest_redis.py
+│   ├── top_k_redis.py
+│   │
+│   ├── redis_sting.py               # Earlier scratch scripts, kept for reference
+│   ├── redis_list.py
+│   ├── redis_set.py
+│   └── redis_hash.py
+│
+├── notes/                           # One reference note per data type
+│   ├── STRING_NOTES.md
+│   ├── BITMAP_NOTES.md
+│   ├── BITFIELD_NOTES.md
+│   ├── ARRAY_NOTES.md
+│   ├── GEOSPATIAL_NOTES.md
+│   ├── HASH_NOTES.md
+│   ├── JSON_NOTES.md
+│   ├── LIST_NOTES.md
+│   ├── SET_NOTES.md
+│   ├── SORTED_SET_NOTES.md
+│   ├── STREAM_NOTES.md
+│   ├── TIMESERIES_NOTES.md
+│   ├── VECTOR_SET_NOTES.md
+│   ├── BLOOM_FILTER_NOTES.md
+│   ├── COUNT_MIN_SKETCH_NOTES.md
+│   ├── CUCKOO_FILTER_NOTES.md
+│   ├── HYPERLOGLOG_NOTES.md
+│   ├── T_DIGEST_NOTES.md
+│   └── TOP_K_NOTES.md
+│
+└── test/
+    └── test_connection.py           # Verifies Redis is reachable from Python
 ```
+
+Naming conventions: practice scripts are `{data_type}_redis.py`, notes are
+`{DATA_TYPE}_NOTES.md`, and the two line up one-to-one — see
+[Practice Scripts & Notes](#practice-scripts--notes).
 
 ---
 
@@ -66,7 +118,7 @@ redis-tutorial/
 
 This repo ships **two** Compose files — pick whichever fits what you're doing right now:
 
-| | `docker-compose.yaml` | `docker-compose-stack.yaml` |
+| | `docker-compose.yaml` | `docker-compose-stack.yaml.yaml` |
 |---|---|---|
 | Image | `redis:7-alpine` | `redis/redis-stack:latest` |
 | Core Redis commands (strings, lists, sets, etc.) | Yes | Yes |
@@ -74,14 +126,14 @@ This repo ships **two** Compose files — pick whichever fits what you're doing 
 | RedisInsight (browser-based GUI) | No | Yes — `http://localhost:8001` |
 | Good for | Plain caching / core data-structure practice | Working with modules (e.g. Bloom filters) or browsing data visually |
 
-**Only run one at a time.** Both map Redis to host port `6379`, so starting the second one while the first is still up will fail with `port is already allocated`. Run `docker compose down` (or, for the stack file, `docker compose -f docker-compose-stack.yaml down`) before switching.
+**Only run one at a time.** Both map Redis to host port `6379`, so starting the second one while the first is still up will fail with `port is already allocated`. Run `docker compose down` (or, for the stack file, `docker compose -f docker-compose-stack.yaml.yaml down`) before switching.
 
 ---
 
 ## Prerequisites
 
 - **Docker** and **Docker Compose** installed ([Docker Desktop](https://www.docker.com/products/docker-desktop/) includes both).
-- **Python 3.8+** with `pip`, if you want to run `test_connection.py`.
+- **Python 3.8+** with `pip`, if you want to run `test/test_connection.py` or the scripts in `src/`.
 
 Check your setup:
 
@@ -122,13 +174,13 @@ python3 --version
 
 ### Using Redis Stack Instead
 
-The commands above default to `docker-compose.yaml` (Compose picks it up automatically since that's its default filename). To use Redis Stack instead, add `-f docker-compose-stack.yaml` to any command:
+The commands above default to `docker-compose.yaml` (Compose picks it up automatically since that's its default filename). To use Redis Stack instead, add `-f docker-compose-stack.yaml.yaml` to any command:
 
 ```bash
-docker compose -f docker-compose-stack.yaml up -d
-docker compose -f docker-compose-stack.yaml ps
-docker compose -f docker-compose-stack.yaml logs -f redis-stack
-docker compose -f docker-compose-stack.yaml down
+docker compose -f docker-compose-stack.yaml.yaml up -d
+docker compose -f docker-compose-stack.yaml.yaml ps
+docker compose -f docker-compose-stack.yaml.yaml logs -f redis-stack
+docker compose -f docker-compose-stack.yaml.yaml down
 ```
 
 ---
@@ -161,13 +213,15 @@ Install the client library:
 pip install redis
 ```
 
-Run the included script:
+Run the included connectivity check:
 
 ```bash
-python3 test_connection.py
+python3 test/test_connection.py
 ```
 
-It connects to `localhost:6379` (because `docker-compose.yml` maps the container's port 6379 to your host's port 6379), sets a test key, reads it back, pings the server, then deletes the test key so it doesn't leave data behind.
+It connects to `localhost:6379` (because `docker-compose.yaml` maps the container's port 6379 to your host's port 6379), sets a test key, reads it back, pings the server, then deletes the test key so it doesn't leave data behind.
+
+Once that passes, the per-data-type scripts in [`src/`](src/) are the next thing to run — see [Practice Scripts & Notes](#practice-scripts--notes).
 
 **Important — hostname depends on where your script runs:**
 
@@ -213,7 +267,7 @@ volumes:
 | `volumes` | Mounts a named volume at `/data`, the directory Redis uses for RDB/AOF files, so data outlives the container. |
 | `healthcheck` | Lets Docker (and `docker compose ps`) report whether Redis is actually accepting commands, not just "started." |
 
-### `docker-compose-stack.yaml` (Redis Stack)
+### `docker-compose-stack.yaml.yaml` (Redis Stack)
 
 ```yaml
 services:
@@ -251,18 +305,49 @@ volumes:
 
 Redis keys can hold more than plain strings. This is a core reason it's used as more than a cache.
 
-| Type | What it is | Example use case |
-|---|---|---|
-| **String** | Binary-safe text/bytes/numbers (up to 512MB) | Caching a rendered page, counters (`INCR`) |
-| **List** | Ordered, linked list of strings | Queues, activity feeds |
-| **Set** | Unordered collection of unique strings | Tags, deduplication, membership checks |
-| **Sorted Set (ZSet)** | Set where each member has a score, kept in order | Leaderboards, rate limiting, priority queues |
-| **Hash** | Field-value pairs under one key (like a mini-object) | Storing a user record (`name`, `email`, …) under one key |
-| **Bitmap** | Bit-level operations on string values | Feature flags, real-time analytics (e.g. daily active users) |
-| **HyperLogLog** | Probabilistic structure for approximate unique counts | "How many unique visitors today?" at huge scale, tiny memory |
-| **Stream** | Append-only log of entries, each with an ID | Event sourcing, activity logs, lightweight message queues |
-| **Geospatial** | Sorted-set variant storing lat/long | "Find nearby drivers/stores" |
-| **Vector Set** *(Redis 8+)* | Stores high-dimensional embeddings for similarity search | AI/ML: semantic search, recommendations |
+Every type below has a runnable script in [`src/`](src/) and a reference note in
+[`notes/`](notes/).
+
+### Core types
+
+| Type | What it is | Script | Notes |
+|---|---|---|---|
+| **String** | Binary-safe bytes up to 512 MB; also Redis' integer/float counter | [`string_redis.py`](src/string_redis.py) | [STRING](notes/STRING_NOTES.md) |
+| **List** | Ordered linked list of strings; O(1) at both ends | [`list_redis.py`](src/list_redis.py) | [LIST](notes/LIST_NOTES.md) |
+| **Set** | Unordered collection of unique strings, with server-side set algebra | [`set_redis.py`](src/set_redis.py) | [SET](notes/SET_NOTES.md) |
+| **Sorted Set** | Unique members ordered by a float score | [`sorted_set_redis.py`](src/sorted_set_redis.py) | [SORTED_SET](notes/SORTED_SET_NOTES.md) |
+| **Hash** | Flat field → value map under one key | [`hash_redis.py`](src/hash_redis.py) | [HASH](notes/HASH_NOTES.md) |
+| **Stream** | Append-only log with consumer groups and acknowledgements | [`stream_redis.py`](src/stream_redis.py) | [STREAM](notes/STREAM_NOTES.md) |
+| **Geospatial** | Coordinates indexed for proximity search — a sorted set underneath | [`geospatial_redis.py`](src/geospatial_redis.py) | [GEOSPATIAL](notes/GEOSPATIAL_NOTES.md) |
+| **HyperLogLog** | Approximate distinct count in a fixed 12 KB | [`hyperloglog_redis.py`](src/hyperloglog_redis.py) | [HYPERLOGLOG](notes/HYPERLOGLOG_NOTES.md) |
+
+### String-backed types
+
+Not separate types — different ways of addressing the bytes of a string.
+
+| Type | What it is | Script | Notes |
+|---|---|---|---|
+| **Bitmap** | A string addressed one bit at a time | [`bitmap_redis.py`](src/bitmap_redis.py) | [BITMAP](notes/BITMAP_NOTES.md) |
+| **Bitfield** | Many small packed integers, with overflow policies | [`bitfield_redis.py`](src/bitfield_redis.py) | [BITFIELD](notes/BITFIELD_NOTES.md) |
+
+### Module types — need Redis Stack
+
+| Type | What it is | Script | Notes |
+|---|---|---|---|
+| **JSON** | A real nested JSON document, mutable by JSONPath | [`json_redis.py`](src/json_redis.py) | [JSON](notes/JSON_NOTES.md) |
+| **Time series** | Timestamped samples with retention, labels and downsampling | [`timeseries_redis.py`](src/timeseries_redis.py) | [TIMESERIES](notes/TIMESERIES_NOTES.md) |
+| **Bloom filter** | "Seen it?" — no false negatives, no deletes | [`bloom_filter_redis.py`](src/bloom_filter_redis.py) | [BLOOM_FILTER](notes/BLOOM_FILTER_NOTES.md) |
+| **Cuckoo filter** | Like Bloom, but supports deletion and counting | [`cuckoo_filter_redis.py`](src/cuckoo_filter_redis.py) | [CUCKOO_FILTER](notes/CUCKOO_FILTER_NOTES.md) |
+| **Count-min sketch** | "How often?" for a named item; never undercounts | [`count_min_sketch_redis.py`](src/count_min_sketch_redis.py) | [COUNT_MIN_SKETCH](notes/COUNT_MIN_SKETCH_NOTES.md) |
+| **Top-K** | "Which items are most frequent?" — maintains the ranking itself | [`top_k_redis.py`](src/top_k_redis.py) | [TOP_K](notes/TOP_K_NOTES.md) |
+| **t-digest** | Percentiles (p50/p99) over a stream, without keeping the values | [`t_digest_redis.py`](src/t_digest_redis.py) | [T_DIGEST](notes/T_DIGEST_NOTES.md) |
+
+### Newer types — need Redis 8
+
+| Type | What it is | Script | Notes |
+|---|---|---|---|
+| **Vector set** *(8.0+)* | Elements ordered by vector similarity, with filtered search | [`vector_set_redis.py`](src/vector_set_redis.py) | [VECTOR_SET](notes/VECTOR_SET_NOTES.md) |
+| **Array** *(8.8+)* | Sparse, index-addressable sequence — gaps cost nothing | [`array_redis.py`](src/array_redis.py) | [ARRAY](notes/ARRAY_NOTES.md) |
 
 Basic examples (via `redis-cli`):
 
@@ -273,6 +358,48 @@ SADD tags "python" "docker"       # Set
 ZADD leaderboard 100 "player1"    # Sorted Set
 HSET user:1 name "Shubhanshu" age "25"  # Hash
 ```
+
+---
+
+## Practice Scripts & Notes
+
+Each script in [`src/`](src/) is standalone and runnable. It walks through the
+commands for one data type with printed commentary, and **cleans up the keys it
+creates** at both ends, so re-running is safe and it won't pollute your
+keyspace.
+
+```bash
+python src/string_redis.py
+python src/sorted_set_redis.py
+python src/json_redis.py
+```
+
+Each note in [`notes/`](notes/) is the reference companion: what the type is,
+complexity, command groups with syntax, the gotchas that actually cost time,
+and a complete cheat-sheet table.
+
+### Which server does each script need?
+
+| Scripts | Requires | Start with |
+|---|---|---|
+| String, Bitmap, Bitfield, List, Hash, Set, Sorted set, Stream, Geospatial, HyperLogLog | Any Redis 7+ | `docker compose up -d` |
+| JSON, Time series, Bloom, Cuckoo, Count-min sketch, Top-K, t-digest | Redis Stack (modules) | `docker compose -f docker-compose-stack.yaml.yaml up -d` |
+| Vector set | Redis **8.0+** | see below |
+| Array | Redis **8.8+** | see below |
+
+Vector sets and arrays are in neither `redis:7-alpine` nor the current
+`redis/redis-stack` image. Both scripts take an optional port argument so you
+can point them at a Redis 8 server running alongside your usual one:
+
+```bash
+docker run -d --rm --name redis8 -p 6380:6379 redis:8-alpine
+python src/vector_set_redis.py 6380
+python src/array_redis.py 6380
+docker stop redis8
+```
+
+Run a script against a server that's too old and it exits with a message naming
+your actual version rather than failing obscurely.
 
 ---
 
@@ -344,7 +471,7 @@ Note: unlike SQL transactions, Redis doesn't roll back on a command failing mid-
 
 ## Redis Stack Extras: RedisInsight & Modules
 
-Only relevant if you're running `docker-compose-stack.yaml`. Plain Redis (`docker-compose.yaml`) doesn't include any of this.
+Only relevant if you're running `docker-compose-stack.yaml.yaml`. Plain Redis (`docker-compose.yaml`) doesn't include any of this.
 
 ### RedisInsight (GUI)
 
@@ -373,7 +500,7 @@ Good for things like "has this user already claimed this coupon?" or "have we cr
 | RedisTimeSeries | `TS.*` | Time-stamped data (metrics, sensor readings) with built-in downsampling |
 | Probabilistic types | `BF.*`, `CF.*`, `CMS.*`, `TOPK.*` | Bloom filters, Cuckoo filters, Count-Min Sketch, Top-K |
 
-These commands only work against `docker-compose-stack.yaml` — running them against the plain `redis:7-alpine` container returns an `unknown command` error.
+These commands only work against `docker-compose-stack.yaml.yaml` — running them against the plain `redis:7-alpine` container returns an `unknown command` error.
 
 ---
 
@@ -427,12 +554,12 @@ Since Redis 8.0 (2025), Redis ships under a **tri-license model** — you can us
 
 | Problem | Likely cause / fix |
 |---|---|
-| `port is already allocated` | Either something else on your machine is using port 6379, or you have both `docker-compose.yaml` and `docker-compose-stack.yaml` running at once (they both use 6379 — see [Choosing a Setup](#choosing-a-setup-plain-redis-vs-redis-stack)). Stop one, or change the host side of a mapping, e.g. `"6380:6379"`. |
+| `port is already allocated` | Either something else on your machine is using port 6379, or you have both `docker-compose.yaml` and `docker-compose-stack.yaml.yaml` running at once (they both use 6379 — see [Choosing a Setup](#choosing-a-setup-plain-redis-vs-redis-stack)). Stop one, or change the host side of a mapping, e.g. `"6380:6379"`. |
 | `Connection refused` from Python | Redis isn't running yet, or you're using the wrong host (`redis` vs `localhost` — see [Connecting from Python](#connecting-from-python)). Run `docker compose ps` to check status. |
 | Data disappeared after `docker compose down` | You likely ran `docker compose down -v`, which also removes the named volume. Use `docker compose down` (without `-v`) to keep data. |
-| `docker compose ps` shows `unhealthy` | Check logs with `docker compose logs redis` (or `docker compose -f docker-compose-stack.yaml logs redis-stack`) — often a config/startup error. |
+| `docker compose ps` shows `unhealthy` | Check logs with `docker compose logs redis` (or `docker compose -f docker-compose-stack.yaml.yaml logs redis-stack`) — often a config/startup error. |
 | `ModuleNotFoundError: No module named 'redis'` | Run `pip install redis` in the Python environment you're using to run the script. |
-| `ERR unknown command 'BF.ADD'` (or `JSON.*`, `FT.*`, `TS.*`) | You're connected to the plain Redis container, not Redis Stack. These module commands only work against `docker-compose-stack.yaml`. |
+| `ERR unknown command 'BF.ADD'` (or `JSON.*`, `FT.*`, `TS.*`) | You're connected to the plain Redis container, not Redis Stack. These module commands only work against `docker-compose-stack.yaml.yaml`. |
 
 ---
 
